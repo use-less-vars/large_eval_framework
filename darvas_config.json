@@ -1,0 +1,16 @@
+{
+    "Darvas_01" :{
+        "volume_multiplier": 1.8,
+        "lookback_period": 252,
+        "box_period": 3,
+        "volume_lookback": 20,
+        "atr_factor": 3
+    },
+    "Darvas_02" :{
+        "volume_multiplier": 2.5,
+        "lookback_period": 180,
+        "box_period": 3,
+        "volume_lookback": 14,
+        "atr_factor": 2
+    }
+}
