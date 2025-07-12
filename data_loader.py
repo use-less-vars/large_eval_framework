@@ -7,8 +7,7 @@ def fetch_data(ticker, start_date, end_date, interval='1d'):
     """
     # Download data
     data = yf.download(ticker, start=start_date, end=end_date, interval=interval)
-    print(data)
-    print(type(data))
+    print(f"fetched ticker {ticker}")
     # Extract just the price data (removing ticker level from MultiIndex)
     if isinstance(data.columns, pd.MultiIndex):
         data = data.xs(ticker, axis=1, level=1)
@@ -18,6 +17,5 @@ def fetch_data(ticker, start_date, end_date, interval='1d'):
 
     # Ensure proper datetime index
     # data.index = pd.to_datetime(data.index)
-    print(data)
     return data
 

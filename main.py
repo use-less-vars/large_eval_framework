@@ -1,4 +1,4 @@
-
+import pandas as pd
 from backtesting import Backtest
 
 
@@ -30,7 +30,7 @@ import numpy as np
 
 if __name__ == "__main__":
     # Fetch data
-    ticker = 'NVDA'
+    ticker = 'SLDP'
     start_date = '2003-7-01'
     end_date = '2024-08-01'
     print(talib.get_functions())
@@ -50,20 +50,42 @@ if __name__ == "__main__":
     #print(timeseries)
     #timeseries.plot(figsize=(10, 6), title='Trading Volume Over Time', ylabel='Volume')
     #plt.show()
-
     tracker = tt.TradeTracker()
 
-    conf = config.load_strategy_params("darvas_config.json", "Darvas")
+    tickers_and_timespan = pd.read_csv("enhanced_tickers.csv")
+    print(tickers_and_timespan.head())
 
-    bt = Backtest(data, strat.DarvasJojo, commission=.002, exclusive_orders=True)
-    stats = bt.run(**conf["Darvas_01"], trade_tracker = tracker, strategy_id = "Darvas_01")
+    for index, row in tickers_and_timespan.iterrows():
+        ticker = row['ticker']
+        start_date = row['first_date']
+        end_date = row['last_date']
+        if row['duration_days'] < 300:
+            continue
 
-    tracker.add_ticker_to_trades(ticker)
-    tracker.show()
-    print(f"listen up you motherfuckers")
-    print(stats)
-    #bt.plot()
+        print(f"Processing {ticker} from {start_date} to {end_date}, ticker number is {index}")
 
+
+        conf = config.load_strategy_params("darvas_config.json", "Darvas")
+        for strategy_id in conf.keys():
+
+            if tracker.check_if_already_ran(strategy_id, ticker):
+                print(f"combo of strategy {strategy_id} and ticker {ticker} already ran")
+                continue
+
+            #if combo has not been run, fetch data
+            data = dl.fetch_data(ticker, start_date, end_date)
+
+            print(f"Current strategy: {strategy_id}, ticker: {ticker}")
+            tracker.start_tracking(strategy_id, ticker, start_date, end_date, conf[strategy_id])
+            bt = Backtest(data, strat.DarvasJojo, commission=.002, exclusive_orders=True)
+            stats = bt.run(**conf[strategy_id], trade_tracker = tracker, strategy_id = strategy_id)
+            print(stats)
+            tracker.show()
+            tracker.finalize_backtest_to_db()
+            if ticker == "NVDA":
+                bt.plot()
+        #bt.plot()
+        print(f"total trades made so far: {tracker.get_total_trades_made()}")
 
     #strat.plot_indicator(numpy_highs, numpy_lows, state, hb, lb )
     numpy_highs = data['High'].values
