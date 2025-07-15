@@ -12,50 +12,17 @@ import config
 
 
 
-"""
-high = np.array([1, 2, 3, 5, 9, 6, 7, 8, 8, 10, 9, 8, 9, 10, 9, 9, 12, 10,  9, 9, 8, 9])
-low  = np.array([0, 1, 2, 4, 4, 5, 6, 7, 6,  9, 8, 7,  8,  7, 8, 8, 10,  8,  7, 7, 6, 7])
-vol  = np.array([0, 0, 0, 0, 0, 0, 0, 0, 0,  0, 1, 2,  2,  3, 3, 3,  5,  5,  5, 5, 4, 6])
-
-high_bounds, low_bounds, box_status, ma_volume = darvas_boxes(high, low, vol, box_period = formation_window, lookback_period=4, volume_lookback=5)
-for i in range(0, len(high_bounds)):
-    print(i,box_status[i],low_bounds[i],high_bounds[i])
-
-import matplotlib.pyplot as plt
-import numpy as np
-
-#sys.exit()
-"""
 
 
 if __name__ == "__main__":
-    # Fetch data
-    ticker = 'SLDP'
-    start_date = '2003-7-01'
-    end_date = '2024-08-01'
-    print(talib.get_functions())
-    data = dl.fetch_data(ticker, start_date, end_date)
-    #gute Zeiträume:  start_date = '2009-02-01' bis '2010-04-01'
-    # auch 10-11
-    # seltsam später stop-loss 2018-7 bis 2019-08 (50 Tage hoch einstellen)
 
-    # Verify data
-    print("Data columns:", data.columns)
-    print("Data types:", data.dtypes)
-    print("Data head:\n", data.head())
-
-    # Run backtest
-
-    #timeseries = data['Volume']
-    #print(timeseries)
-    #timeseries.plot(figsize=(10, 6), title='Trading Volume Over Time', ylabel='Volume')
-    #plt.show()
     tracker = tt.TradeTracker()
+    loader = dl.DataLoader()
 
     tickers_and_timespan = pd.read_csv("enhanced_tickers.csv")
     print(tickers_and_timespan.head())
-
-    for index, row in tickers_and_timespan.iterrows():
+    start_index = 2579 #not always start from the beginning.
+    for index, row in tickers_and_timespan.iloc[start_index:].iterrows():
         ticker = row['ticker']
         start_date = row['first_date']
         end_date = row['last_date']
@@ -70,10 +37,10 @@ if __name__ == "__main__":
 
             if tracker.check_if_already_ran(strategy_id, ticker):
                 print(f"combo of strategy {strategy_id} and ticker {ticker} already ran")
-                continue
+                #continue
 
             #if combo has not been run, fetch data
-            data = dl.fetch_data(ticker, start_date, end_date)
+            data = loader.fetch_data(ticker, start_date, end_date)
 
             print(f"Current strategy: {strategy_id}, ticker: {ticker}")
             tracker.start_tracking(strategy_id, ticker, start_date, end_date, conf[strategy_id])
