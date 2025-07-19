@@ -33,7 +33,7 @@ class Trade:
         #self.parameters = params,
         #regime = trade.regime,
         #tags = get_stock_tags(trade.ticker)
-        print(f"New Trade started: {strategy_id} ")
+        #print(f"New Trade started: {strategy_id} ")
 
     def close(self, exit_time, exit_price):
         self.exit_time = exit_time
@@ -118,28 +118,54 @@ class TradeTracker:
             """)
 
     def finalize_backtest_to_db(self):
-        """Save completed backtest results to db"""
+        """Save completed backtest results to db with duplicate prevention"""
         if not self.metadata:
             return
-            #raise ValueError("No backtest to finalize")
 
         try:
             with self.conn:
+                # First check if identical backtest already exists
+                cursor = self.conn.execute("""
+                    SELECT id FROM backtests 
+                    WHERE strategy_id = ? 
+                    AND ticker = ?
+                    AND start_date = ?
+                    AND end_date = ?
+                    LIMIT 1
+                """, (
+                    self.metadata.strategy_id,
+                    self.metadata.ticker,
+                    self.metadata.start_date,
+                    self.metadata.end_date
+                ))
+
+                existing = cursor.fetchone()
+                if existing:
+                    print(f"Identical backtest already exists (ID: {existing[0]})")
+                    return existing[0]  # Return existing backtest ID
+
+                # Mark ticker as processed for this strategy
                 self.conn.execute("""
                     INSERT OR IGNORE INTO processed_tickers
                     (strategy_id, ticker) VALUES(?, ?)
                 """, (self.metadata.strategy_id, self.metadata.ticker))
 
+                # Insert new backtest
                 cursor = self.conn.execute("""
                     INSERT INTO backtests
-                    (strategy_id, ticker, start_date, end_date, parameters) VALUES(?,?,?,?,?)
+                    (strategy_id, ticker, start_date, end_date, parameters) 
+                    VALUES(?,?,?,?,?)
                     RETURNING id
-                    """, (self.metadata.strategy_id,
-                          self.metadata.ticker,
-                          self.metadata.start_date,
-                          self.metadata.end_date,
-                          json.dumps(self.metadata.parameters)))
+                """, (
+                    self.metadata.strategy_id,
+                    self.metadata.ticker,
+                    self.metadata.start_date,
+                    self.metadata.end_date,
+                    json.dumps(self.metadata.parameters)
+                ))
                 backtest_id = cursor.fetchone()[0]
+
+                # Insert trades
                 trade_data = [
                     (
                         backtest_id,
@@ -155,7 +181,9 @@ class TradeTracker:
                 self.conn.executemany("""
                     INSERT INTO trades (backtest_id, entry_time, exit_time, entry_price, exit_price, pnl, duration)
                     VALUES(?,?,?,?,?,?,?)
-                    """,trade_data)
+                """, trade_data)
+
+                return backtest_id
 
         except sqlite3.Error as e:
             print(f"Database error: {e}")

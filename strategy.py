@@ -6,6 +6,9 @@ import pandas as pd
 import talib
 import trade_tracker
 
+from datetime import timedelta
+from bokeh.plotting import figure, show
+from bokeh.models import BoxAnnotation
 
 #1. Darvas Strategy
 
@@ -16,6 +19,15 @@ STATE_MAP = {
     "IN_BOX":3,
     "BOX_CANCELED":4
 }
+
+
+class StrategyResults:
+    def __init__(self):
+        self.date = None
+        self.high_bounds = None
+        self.low_bounds = None
+        self.box_status = None
+        self.stop_values = None
 
 REVERSE_STATE_MAP ={v:k for k,v in STATE_MAP.items() }
 
@@ -79,6 +91,7 @@ class DarvasJojo(Strategy):
     volume_lookback : int= 20
     atr_factor : float = 3
     trade_tracker : 'trade_tracker.TradeTracker' = None
+    storage :'StrategyResults' = None
 
     def init(self):
 
@@ -87,47 +100,141 @@ class DarvasJojo(Strategy):
                                                             self.volume_lookback,
                                                             plot=True, overlay= False)
         self.entry_price = 0.0
+        self.stop_val_arr = np.full(len(self.data), 0, dtype=np.float64)
         self.atr = self.I(talib.ATR, self.data.High, self.data.Low, self.data.Close, timeperiod=14)
         self.last_day = self.data.df.index[-2]
         print("last day = ", self.last_day)
+
     def next(self):
+        current_idx = len(self.data) - 1
         #print(self.status[-1], self.hb[-1], self.lb[-1], end="\n")
         if not self.position and self.status[-2] == STATE_MAP["IN_BOX"]:
             if self.data.Volume[-1] >= self.volume_multiplier * self.ma_vol[-2]:
                 if self.data.High[-1] >= self.hb[-2]:
-                    #self.buy()
                     self.custom_buy()
-                    print(f"bought at {self.data.index[-1]} ")
                     self.stop_price = (self.hb[-2] + self.lb[-2])/2
-                    #self.stop_price = self.hb[-2]-1.5*self.atr[-1]
-                    self.stop_price += 0.01 #debug
+
         elif self.position:
             # Simple volatility-adjusted trailing stop
-
-            self.stop_val = max(self.stop_price, self.data.High[-1] - self.atr_factor  * self.atr[-1])
-
+            self.stop_val = max(self.stop_price, float(self.data.High[-1])-self.atr_factor  * float(self.atr[-1]))
+            self.stop_val_arr[current_idx] = self.stop_val
             # Never lower the stop
             self.stop_val = max(self.stop_val, self.entry_price * 0.93)  # Floor at 7%
 
             # Exit condition
             if self.data.Close[-1] < self.stop_val or self.data.df.index[-1] == self.last_day:
-                #self.position.close()
                 self.custom_close()
-                print(f"Exited at data {self.data.index[-1]} at {self.data.Close[-1]:.2f}, Stop: {self.stop_val:.2f}")
-        #if self.data.Low[-1] < self.current_stop:
-          #  self.position.close()
+        if self.data.df.index[-1] == self.last_day:
+            self.finalize()
+
 
     def custom_buy(self):
         self.buy()
         if self.trade_tracker is not None:
-            print("OPEN TRADE")
+            #print("OPEN TRADE")
             self.trade_tracker.open_trade(self.strategy_id,self.data.index[-1],self.data.Open[-1])
 
     def custom_close(self):
         self.position.close()
         if self.trade_tracker is not None:
-            print("CLOSE TRADE")
+            #print("CLOSE TRADE")
             self.trade_tracker.close_trade(self.data.index[-1], self.data.Close[-1])
+
+    def finalize(self):
+        if self.storage:
+            self.storage.date = self.data.df.index
+            self.storage.high_bounds = self.hb
+            self.storage.low_bounds = self.lb
+            self.storage.box_status = self.status
+            self.storage.stop_values = self.stop_val_arr
+
+def plot_trade(df: pd.DataFrame, storage: StrategyResults = None, start_date = None, end_date = None):
+    plot_df = df.copy()
+    boxes = get_boxes(storage)
+
+
+    if not isinstance(plot_df.index, pd.DatetimeIndex):
+        plot_df.index = pd.to_datetime(plot_df.index)
+
+    if start_date and end_date:
+        plot_df = plot_df.loc[start_date:end_date]
+
+    plot_df["date"] = plot_df.index
+
+    inc = plot_df.Close > plot_df.Open
+    dec = plot_df.Open > plot_df.Close
+    w = 16 * 60 * 60 * 1000  # milliseconds
+
+    TOOLS = "pan,wheel_zoom,box_zoom,reset,save"
+
+    p = figure(x_axis_type="datetime", tools=TOOLS, width=1100, height=500,
+               title=" Candlestick", background_fill_color="#efefef")
+
+    # Add to Bokeh plot
+
+
+    p.xaxis.major_label_orientation = 0.8  # radians
+
+    p.segment(plot_df.date, plot_df.High, plot_df.date, plot_df.Low, color="black")
+
+    p.vbar(plot_df.date[dec], w, plot_df.Open[dec], plot_df.Close[dec], color="#eb3c40")
+    p.vbar(plot_df.date[inc], w, plot_df.Open[inc], plot_df.Close[inc], fill_color="green",
+           line_color="#1c7c55", line_width=2)
+    # Convert dates to pandas Timestamp (safe conversion)
+    start_date = pd.to_datetime(start_date) if start_date is not None else None
+    end_date = pd.to_datetime(end_date) if end_date is not None else None
+
+    # Filter price data (safe with None dates)
+
+    # Get all boxes (your existing box creation method)
+    boxes = get_boxes(storage)
+
+    # Add only boxes fully contained in time frame
+    for box in boxes:
+        box_start = pd.to_datetime(box['start_date'])
+        box_end = pd.to_datetime(box['end_date'])
+
+        # Check if box is fully within time frame (handles None dates)
+        if ((start_date is None or box_start >= start_date) and
+                (end_date is None or box_end <= end_date)):
+            p.add_layout(BoxAnnotation(
+                left=box['start_date']-timedelta(hours=12),
+                right=box['end_date']+timedelta(hours=12),
+                bottom=box['low_val']*0.999,
+                top=box['high_val']*1.001,
+                fill_alpha=0.1,
+                fill_color="navy",
+                line_color="blue",
+                line_width=0.5
+            ))
+
+    p.line(plot_df['date'], storage.stop_values[start_date:end_date],
+           line_width=2, color="red",
+           legend_label="Stop Loss",
+           line_alpha=0.8)
+    show(p)
+
+
+def get_boxes(storage: StrategyResults):
+    boxes = []
+    box = None
+    for idx in range(1,len(storage.date)):
+        if storage.box_status[idx-1] == STATE_MAP["NEW_BOX"] and storage.box_status[idx] == STATE_MAP['BOX_FORMING']:
+            box = {
+                'start_date': storage.date[idx-1],
+                'end_date': None,
+                'high_val': storage.high_bounds[idx-1],
+                'low_val': None,
+            }
+        if storage.box_status[idx-1] == STATE_MAP['IN_BOX'] and storage.box_status[idx] != STATE_MAP['IN_BOX']:
+            box['end_date'] = storage.date[idx-1]
+            box['low_val'] = storage.low_bounds[idx-1]
+            boxes.append(box)
+            box = None
+
+    return boxes
+
+
 
 
 def plot_indicator(high,low, box_status,high_bounds,low_bounds):

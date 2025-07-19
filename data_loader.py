@@ -1,6 +1,8 @@
 import yfinance as yf
 import sqlite3
 import pandas as pd
+import sys
+from termcolor import colored, cprint
 
 
 class DataLoader:
@@ -94,7 +96,7 @@ class DataLoader:
 
             return df
 
-    def data_available_in_cache(self, ticker, start_date, end_date, max_consecutive_missing=3):
+    def data_available_in_cache(self, ticker, start_date, end_date, max_consecutive_missing=7):
         """
         Check cache for problematic gaps (>N consecutive missing weekdays)
         Returns True if cache is good enough for backtesting
@@ -108,16 +110,33 @@ class DataLoader:
             ])
 
             if len(dates) < 2:  # Not enough data to check gaps
+                print("Not enough data points to analyze gaps")
                 return False
 
-            # Calculate day differences between consecutive dates
-            day_diffs = dates.to_series().diff().dt.days.fillna(1)
+            # Convert to DataFrame for easier analysis
+            df = pd.DataFrame({'date': dates})
+            df['day_diff'] = df['date'].diff().dt.days.fillna(1)
+
+            # Find all gaps > 1 day
+            gaps = df[df['day_diff'] > 1].copy()
+
+            # Add gap information
+            if not gaps.empty:
+                gaps['gap_start'] = gaps['date'].shift(1)
+                gaps['gap_end'] = gaps['date']
+                gaps['weekday_gap'] = gaps['day_diff'] - 2  # Subtract weekend days
+
+                # Find largest gap
+                largest_gap = gaps.loc[gaps['day_diff'].idxmax()]
+                print(f"Largest gap was {largest_gap['day_diff']} calendar days "
+                      f"from {largest_gap['gap_start'].date()} to {largest_gap['gap_end'].date()} "
+                      f"({max(0, largest_gap['weekday_gap'])} weekdays missing)")
 
             # Find consecutive missing weekdays (gaps >1 day, ignoring weekends)
             consecutive_missing = []
             current_gap = 0
 
-            for diff in day_diffs:
+            for diff in df['day_diff']:
                 if diff > 1:  # Found a gap
                     # Only count weekdays in the gap (diff=2 could be weekend)
                     gap_weekdays = max(0, diff - 2)  # Subtract weekend days
@@ -134,3 +153,143 @@ class DataLoader:
                 print(f"Found {len(problematic_gaps)} problematic gaps (> {max_consecutive_missing} weekdays missing)")
                 return False
             return True
+
+import sqlite3
+import pandas as pd
+from datetime import datetime, timedelta
+import plotly.graph_objects as go  # For visualization
+from typing import List, Dict, Union  # Optional but recommended for type hints
+
+
+class CacheForensics:
+    def __init__(self, db_path='yfinance_cache.db'):
+        self.db_path = db_path
+
+    def get_gap_analysis(self, ticker, start_date, end_date):
+        """Comprehensive analysis of data gaps in cache"""
+        with sqlite3.connect(self.db_path) as conn:
+            # Get all cached dates
+            dates = pd.to_datetime([
+                row[0] for row in conn.execute(
+                    "SELECT date FROM stock_data WHERE ticker=? AND date BETWEEN ? AND ? ORDER BY date",
+                    (ticker, start_date, end_date))
+            ])
+
+            if len(dates) < 2:
+                return {"error": "Insufficient data"}
+
+            # Generate complete business day range
+            full_range = pd.date_range(start=dates.min(), end=dates.max(), freq='B')
+            missing_dates = set(full_range) - set(dates)
+
+            # Convert to DataFrames for analysis
+            df_dates = pd.DataFrame({'date': dates, 'available': True})
+            df_missing = pd.DataFrame({'date': sorted(missing_dates)})
+
+            # Calculate gap statistics
+            df_dates['day_diff'] = df_dates['date'].diff().dt.days.fillna(1)
+            gaps = df_dates[df_dates['day_diff'] > 1].copy()
+            gaps['gap_length'] = gaps['day_diff'] - 1  # Simple gap count
+
+            # Weekend-adjusted gap analysis
+            gaps['weekend_adjusted'] = gaps['day_diff'].apply(
+                lambda x: max(0, (x - 2))  # Subtract 2 days for weekends
+            )
+
+            # Find missing date clusters
+            df_missing['gap_group'] = (df_missing['date'].diff() > timedelta(days=3)).cumsum()
+            gap_clusters = df_missing.groupby('gap_group').agg(
+                start_date=('date', 'min'),
+                end_date=('date', 'max'),
+                missing_days=('date', 'count')
+            ).reset_index(drop=True)
+
+            # Holiday detection
+            us_holidays = self.get_us_holidays()
+            df_missing['is_holiday'] = df_missing['date'].isin(us_holidays)
+
+            return {
+                'summary_stats': {
+                    'total_days': len(full_range),
+                    'available_days': len(dates),
+                    'missing_days': len(missing_dates),
+                    'completeness_ratio': len(dates) / len(full_range),
+                    'largest_gap': gaps['day_diff'].max(),
+                    'largest_weekday_gap': gaps['weekend_adjusted'].max()
+                },
+                'gap_details': gaps.to_dict('records'),
+                'missing_date_clusters': gap_clusters.to_dict('records'),
+                'holiday_breakdown': {
+                    'total_holidays': df_missing['is_holiday'].sum(),
+                    'missing_on_holidays': df_missing[df_missing['is_holiday']].shape[0],
+                    'unexplained_missing': df_missing[~df_missing['is_holiday']].shape[0]
+                },
+                'raw_missing_dates': [d.strftime('%Y-%m-%d') for d in sorted(missing_dates)]
+            }
+
+    def get_us_holidays(self, years=range(2000, 2026)):
+        """Generate US market holidays"""
+        holidays = []
+        for year in years:
+            # New Year's
+            holidays.append(f"{year}-01-01")
+            # MLK Day (3rd Monday)
+            holidays.append(f"{year}-01-{15 + (pd.Timestamp(f'{year}-01-15').dayofweek == 0)}")
+            # ... (add other holidays as shown in previous examples)
+        return pd.to_datetime(holidays).date
+
+    def visualize_gaps(self, ticker, start_date, end_date):
+        """Visual representation of data gaps"""
+        analysis = self.get_gap_analysis(ticker, start_date, end_date)
+
+        if 'error' in analysis:
+            print(analysis['error'])
+            return
+
+        # Timeline visualization
+        fig = go.Figure()
+
+        # Available dates
+        fig.add_trace(go.Scatter(
+            x=pd.to_datetime(analysis['raw_missing_dates']),
+            y=[1] * len(analysis['raw_missing_dates']),
+            mode='markers',
+            marker=dict(color='red', size=8),
+            name='Missing Dates'
+        ))
+
+        # Add holiday markers
+        holidays = [d for d in analysis['raw_missing_dates']
+                    if d in self.get_us_holidays()]
+        fig.add_trace(go.Scatter(
+            x=pd.to_datetime(holidays),
+            y=[1.1] * len(holidays),
+            mode='markers',
+            marker=dict(color='orange', size=10, symbol='star'),
+            name='Market Holidays'
+        ))
+
+        # Layout
+        fig.update_layout(
+            title=f"Data Gap Analysis for {ticker}",
+            yaxis=dict(visible=False, range=[0.9, 1.2]),
+            xaxis_title='Date',
+            showlegend=True
+        )
+
+        fig.show()
+
+        # Print summary
+        print("\n=== Gap Analysis Summary ===")
+        print(f"Data Completeness: {analysis['summary_stats']['completeness_ratio']:.1%}")
+        print(f"Largest Gap: {analysis['summary_stats']['largest_gap']} days")
+        print(f"Largest Weekday Gap: {analysis['summary_stats']['largest_weekday_gap']} days")
+        print(f"\nTop Missing Date Clusters:")
+        for cluster in sorted(analysis['missing_date_clusters'],
+                              key=lambda x: x['missing_days'], reverse=True)[:3]:
+            print(f"- {cluster['start_date']} to {cluster['end_date']}: {cluster['missing_days']} days")
+
+        print("\nHoliday Analysis:")
+        print(f"Total Market Holidays: {analysis['holiday_breakdown']['total_holidays']}")
+        print(f"Missing on Holidays: {analysis['holiday_breakdown']['missing_on_holidays']}")
+        print(f"Unexplained Missing Days: {analysis['holiday_breakdown']['unexplained_missing']}")

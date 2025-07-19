@@ -19,9 +19,11 @@ if __name__ == "__main__":
     tracker = tt.TradeTracker()
     loader = dl.DataLoader()
 
+
+
     tickers_and_timespan = pd.read_csv("enhanced_tickers.csv")
-    print(tickers_and_timespan.head())
-    start_index = 2579 #not always start from the beginning.
+
+    start_index = 0#not always start from the beginning.
     for index, row in tickers_and_timespan.iloc[start_index:].iterrows():
         ticker = row['ticker']
         start_date = row['first_date']
@@ -41,16 +43,18 @@ if __name__ == "__main__":
 
             #if combo has not been run, fetch data
             data = loader.fetch_data(ticker, start_date, end_date)
-
+            storage = strat.StrategyResults()
             print(f"Current strategy: {strategy_id}, ticker: {ticker}")
             tracker.start_tracking(strategy_id, ticker, start_date, end_date, conf[strategy_id])
             bt = Backtest(data, strat.DarvasJojo, commission=.002, exclusive_orders=True)
-            stats = bt.run(**conf[strategy_id], trade_tracker = tracker, strategy_id = strategy_id)
-            print(stats)
+            stats = bt.run(**conf[strategy_id], trade_tracker = tracker, strategy_id = strategy_id, storage = storage)
+            #print(stats)
+
             tracker.show()
             tracker.finalize_backtest_to_db()
-            if ticker == "NVDA":
-                bt.plot()
+            if ticker == "MODG":
+                #bt.plot()
+                strat.plot_trade(data,storage,"2018-02-01", "2018-12-25")
         #bt.plot()
         print(f"total trades made so far: {tracker.get_total_trades_made()}")
 
@@ -60,3 +64,4 @@ if __name__ == "__main__":
     numpy_volume = data['Volume'].values
     hb,lb,state,avg_vol = strat.darvas_boxes(numpy_highs, numpy_lows, numpy_volume)
     print([strat.REVERSE_STATE_MAP[s] for s in state[190:202]], hb[190:202], numpy_highs[190:202])
+
