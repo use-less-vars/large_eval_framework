@@ -100,9 +100,9 @@ class DarvasJojo(Strategy):
                                                             self.volume_lookback,
                                                             plot=True, overlay= False)
         self.entry_price = 0.0
-        self.stop_val_arr = np.full(len(self.data), 0, dtype=np.float64)
+        self.stop_val_arr = np.full(len(self.hb), 0, dtype=np.float64)
         self.atr = self.I(talib.ATR, self.data.High, self.data.Low, self.data.Close, timeperiod=14)
-        self.last_day = self.data.df.index[-2]
+        self.last_day = self.data.df.index[-1]
         print("last day = ", self.last_day)
 
     def next(self):
@@ -119,7 +119,7 @@ class DarvasJojo(Strategy):
             self.stop_val = max(self.stop_price, float(self.data.High[-1])-self.atr_factor  * float(self.atr[-1]))
             self.stop_val_arr[current_idx] = self.stop_val
             # Never lower the stop
-            self.stop_val = max(self.stop_val, self.entry_price * 0.93)  # Floor at 7%
+            #self.stop_val = max(self.stop_val, self.entry_price * 0.93)  # Floor at 7%
 
             # Exit condition
             if self.data.Close[-1] < self.stop_val or self.data.df.index[-1] == self.last_day:
@@ -150,9 +150,7 @@ class DarvasJojo(Strategy):
 
 def plot_trade(df: pd.DataFrame, storage: StrategyResults = None, start_date = None, end_date = None):
     plot_df = df.copy()
-    boxes = get_boxes(storage)
-
-
+    print(len(plot_df))
     if not isinstance(plot_df.index, pd.DatetimeIndex):
         plot_df.index = pd.to_datetime(plot_df.index)
 
@@ -167,7 +165,7 @@ def plot_trade(df: pd.DataFrame, storage: StrategyResults = None, start_date = N
 
     TOOLS = "pan,wheel_zoom,box_zoom,reset,save"
 
-    p = figure(x_axis_type="datetime", tools=TOOLS, width=1100, height=500,
+    p = figure(x_axis_type="datetime", tools=TOOLS, width=1400, height=700,
                title=" Candlestick", background_fill_color="#efefef")
 
     # Add to Bokeh plot
@@ -187,6 +185,7 @@ def plot_trade(df: pd.DataFrame, storage: StrategyResults = None, start_date = N
     # Filter price data (safe with None dates)
 
     # Get all boxes (your existing box creation method)
+
     boxes = get_boxes(storage)
 
     # Add only boxes fully contained in time frame
@@ -208,7 +207,18 @@ def plot_trade(df: pd.DataFrame, storage: StrategyResults = None, start_date = N
                 line_width=0.5
             ))
 
-    p.line(plot_df['date'], storage.stop_values[start_date:end_date],
+    # First ensure we have datetime indices
+    stop_dates = pd.to_datetime(storage.date)
+    stop_values = pd.Series(storage.stop_values, index=stop_dates)
+
+    # Filter stop values to match plot_df's range
+    if start_date or end_date:
+        mask = (stop_dates >= pd.to_datetime(start_date)) if start_date else True
+        mask &= (stop_dates <= pd.to_datetime(end_date)) if end_date else True
+        stop_values = stop_values[mask]
+
+    # Now plot with aligned data
+    p.line(stop_values.index, stop_values.values,
            line_width=2, color="red",
            legend_label="Stop Loss",
            line_alpha=0.8)

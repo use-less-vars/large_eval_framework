@@ -1,6 +1,6 @@
 import pandas as pd
 from backtesting import Backtest
-
+import visualization as vis
 
 import data_loader as dl
 import trade_tracker as tt
@@ -34,7 +34,7 @@ if __name__ == "__main__":
         print(f"Processing {ticker} from {start_date} to {end_date}, ticker number is {index}")
 
 
-        conf = config.load_strategy_params("darvas_config.json", "Darvas")
+        conf = config.load_strategy_params("darvas_config.json")
         for strategy_id in conf.keys():
 
             if tracker.check_if_already_ran(strategy_id, ticker):
@@ -50,12 +50,18 @@ if __name__ == "__main__":
             stats = bt.run(**conf[strategy_id], trade_tracker = tracker, strategy_id = strategy_id, storage = storage)
             #print(stats)
 
+            print(conf[strategy_id])
+            print(len(storage.stop_values),len(storage.low_bounds),len(storage.date),len(storage.box_status))
             tracker.show()
             tracker.finalize_backtest_to_db()
-            if ticker == "MODG":
+            if ticker == "MODG" and strategy_id == "Darvas_01":
                 #bt.plot()
-                strat.plot_trade(data,storage,"2018-02-01", "2018-12-25")
+                for index in range(95,103):
+                    vis.plot_trade(index,30,5)
+                #strat.plot_trade(data,storage,"2018-02-01", "2018-12-25")
         #bt.plot()
+            trade = tt.lookup_trade(99)
+            print(trade)
         print(f"total trades made so far: {tracker.get_total_trades_made()}")
 
     #strat.plot_indicator(numpy_highs, numpy_lows, state, hb, lb )

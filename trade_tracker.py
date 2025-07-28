@@ -20,29 +20,49 @@ class TradeMetaData:
 
 @dataclass
 class Trade:
-    def __init__(self, strategy_id, entry_time, entry_price  ):
-        self.strategy_id = strategy_id
-        #self.ticker = "Unknown"
-        self.entry_time = entry_time
-        self.exit_time = None
-        self.entry_price = entry_price
-        self.exit_price = None
-        #quantity = size,
-        self.pnl = None
-        self.duration = None     #(self.exit_time - self.entry_time).days,
-        #self.parameters = params,
-        #regime = trade.regime,
-        #tags = get_stock_tags(trade.ticker)
-        #print(f"New Trade started: {strategy_id} ")
+    # Required at creation
+    strategy_id: str
+    entry_time: datetime
+    entry_price: float
 
-    def close(self, exit_time, exit_price):
+    # Optional (set later)
+    exit_time: Optional[datetime] = None
+    exit_price: Optional[float] = None
+    pnl: Optional[float] = None
+    duration: Optional[int] = None
+
+    # Additional metadata (from DB)
+    id: Optional[int] = None
+    ticker: Optional[str] = None
+    parameters: Optional[dict] = None
+
+    @classmethod
+    def from_complete_data(cls,
+                           strategy_id: str,
+                           entry_time: datetime,
+                           entry_price: float,
+                           exit_time: Optional[datetime] = None,
+                           exit_price: Optional[float] = None,
+                           **kwargs):
+        """Alternative constructor for complete trades"""
+        trade = cls(
+            strategy_id=strategy_id,
+            entry_time=entry_time,
+            entry_price=entry_price
+        )
+        if exit_time and exit_price:
+            trade.close(exit_time, exit_price)
+        if kwargs:
+            for k, v in kwargs.items():
+                setattr(trade, k, v)
+        return trade
+
+    def close(self, exit_time: datetime, exit_price: float):
         self.exit_time = exit_time
         self.exit_price = exit_price
-        self.pnl = (self.exit_price-self.entry_price)/self.entry_price*100 #profit in percent
-        self.duration = (self.exit_time-self.entry_time).days
+        self.pnl = (exit_price - self.entry_price) / self.entry_price * 100
+        self.duration = (exit_time - self.entry_time).days
 
-    #def add_ticker(self, ticker = "Unknown"):
-    #    self.ticker = ticker
     def to_dict(self):
         return {
             'strategy_id':self.strategy_id,
@@ -204,6 +224,31 @@ class TradeTracker:
             print(f"Database error checking processed tickers: {e}")
             return False
 
+    def lookup_trade(trade_id: int, db_path: str = "trades.db") -> Optional[Trade]:
+        try:
+            with sqlite3.connect(db_path) as conn:
+                conn.row_factory = sqlite3.Row
+                cursor = conn.execute("""
+                    SELECT t.*, b.strategy_id, b.ticker, b.parameters 
+                    FROM trades t JOIN backtests b ON t.backtest_id = b.id 
+                    WHERE t.id = ?
+                """, (trade_id,))
+
+                if row := cursor.fetchone():
+                    return Trade.from_complete_data(
+                        strategy_id=row['strategy_id'],
+                        entry_time=datetime.fromisoformat(row['entry_time']),
+                        entry_price=row['entry_price'],
+                        exit_time=datetime.fromisoformat(row['exit_time']) if row['exit_time'] else None,
+                        exit_price=row['exit_price'],
+                        id=row['id'],
+                        ticker=row['ticker'],
+                        parameters=json.loads(row['parameters'])
+                    )
+        except Exception as e:
+            print(f"Error loading trade {trade_id}: {str(e)}")
+        return None
+
     def start_tracking(self, strategy_id, ticker, start_date, end_date, params):
         self.metadata = TradeMetaData(strategy_id=strategy_id,
                                       ticker=ticker,
@@ -287,3 +332,69 @@ class TradeTracker:
         print("Trades made:")
         for i, trade in enumerate(self.trades, 1):
             print(f"{i}. {trade}")
+
+
+def lookup_trade(trade_id: int, db_path: str = "trades.db") -> Optional[Trade]:
+    """
+    Standalone function to retrieve a trade by ID from SQLite database.
+
+    Args:
+        trade_id: The ID of the trade in the database
+        db_path: Path to SQLite database (default: 'trades.db')
+
+    Returns:
+        Trade object if found, None otherwise
+    """
+    try:
+        with sqlite3.connect(db_path) as conn:
+            conn.row_factory = sqlite3.Row  # Access columns by name
+            cursor = conn.execute("""
+                SELECT 
+                    t.id,
+                    t.entry_time, 
+                    t.exit_time, 
+                    t.entry_price, 
+                    t.exit_price,
+                    t.pnl,
+                    t.duration,
+                    b.strategy_id,
+                    b.ticker,
+                    b.parameters
+                FROM trades t
+                JOIN backtests b ON t.backtest_id = b.id
+                WHERE t.id = ?
+            """, (trade_id,))
+
+            row = cursor.fetchone()
+
+            if not row:
+                print(f"No trade found with ID {trade_id}")
+                return None
+
+            # Convert database row to Trade object
+            return Trade(
+                strategy_id=row['strategy_id'],
+                entry_time=datetime.fromisoformat(row['entry_time']),
+                exit_time=datetime.fromisoformat(row['exit_time']) if row['exit_time'] else None,
+                entry_price=row['entry_price'],
+                exit_price=row['exit_price'],
+                pnl=row['pnl'],
+                duration=row['duration'],
+                ticker=row['ticker'],
+                parameters=json.loads(row['parameters'])
+            )
+
+    except sqlite3.Error as e:
+        print(f"Database error looking up trade {trade_id}: {e}")
+        return None
+    except json.JSONDecodeError:
+        print(f"Error parsing parameters for trade {trade_id}")
+        return None
+
+
+    except Exception as e:
+        print(f"Unexpected error: {e}")
+        return None
+
+
+
