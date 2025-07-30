@@ -19,15 +19,16 @@ if __name__ == "__main__":
     tracker = tt.TradeTracker()
     loader = dl.DataLoader()
 
+    symbols = loader.get_all_symbols()
+    loader.filter_good_tickers(symbols)
 
-
-    tickers_and_timespan = pd.read_csv("enhanced_tickers.csv")
+    tickers_and_timespan = pd.read_csv("good_tickers.csv")
 
     start_index = 0#not always start from the beginning.
     for index, row in tickers_and_timespan.iloc[start_index:].iterrows():
         ticker = row['ticker']
-        start_date = row['first_date']
-        end_date = row['last_date']
+        start_date = row['start_date']
+        end_date = row['end_date']
         if row['duration_days'] < 300:
             continue
 
